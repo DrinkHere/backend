@@ -19,6 +19,7 @@ spring:
       - application-redis-local.yml
       - application-s3-local.yml
       - application-hc-local.yml
+      - application-pass-local.yml
 
 logging:
   level:
@@ -37,6 +38,7 @@ spring:
       - application-redis-prod.yml
       - application-s3-prod.yml
       - application-hc-prod.yml
+      - application-pass-prod.yml
 
 logging:
   level:

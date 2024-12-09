@@ -7,4 +7,5 @@ jar {
 
 dependencies {
     implementation project(':api:api-health-check')
+    implementation project(':infra:infra-pass')
 }

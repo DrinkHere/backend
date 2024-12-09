@@ -1,4 +1,4 @@
-package com.drinkhere.infras3.response;
+package com.drinkhere.infrapass.response;
 
 import com.drinkhere.common.response.BaseSuccessStatus;
 import lombok.Getter;
@@ -7,8 +7,8 @@ import org.springframework.http.HttpStatus;
 
 @Getter
 @RequiredArgsConstructor
-public enum PresignedUrlSuccessStatus implements BaseSuccessStatus {
-    CREATE_PRESIGNED_SUCCESS(HttpStatus.CREATED, "PUT 위한 Presigned URL 생성 성공");
+public enum NiceApiSuccessStatus implements BaseSuccessStatus {
+    START_PASS_AUTHENTICATION_SUCCESS(HttpStatus.OK, "패스 본인인증 로직 시작");
 
     private final HttpStatus httpStatus;
     private final String message;
