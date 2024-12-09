@@ -79,4 +79,10 @@ task copyPrivate(type: Copy) {
 		include "application-s3-prod.yml"
 		into 'infra/infra-s3/src/main/resources'
 	}
+
+	copy {
+		from './backend-submodule'
+		include "application-pass-prod.yml"
+		into 'infra/infra-pass/src/main/resources'
+	}
 }
