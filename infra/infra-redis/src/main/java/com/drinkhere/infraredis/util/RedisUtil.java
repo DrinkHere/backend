@@ -17,6 +17,10 @@ public class RedisUtil {
         redisTemplate.opsForValue().set(key, val, time, timeUnit);
     }
 
+    public void saveWithoutExpiration(String key, Object val) {
+        redisTemplate.opsForValue().set(key, val);
+    }
+
     public void appendToRecentlyViewedAnnouncement(String key, String newValue) {
         long RECENT_VIEWED_ANNOUNCEMENT_LIMIT = 20;
 

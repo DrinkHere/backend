@@ -1,6 +1,6 @@
 package com.drinkhere.infrapass.dto.request;
 
-public record GetEncTokenRequest(
+public record GetCryptoTokenRequest(
         DataHeader dataHeader,
         DataBody dataBody
 ) {

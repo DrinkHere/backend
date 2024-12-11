@@ -1,83 +1,95 @@
 package com.drinkhere.infrapass.application;
 
 import com.drinkhere.infrapass.config.NiceApiProperties;
-import com.drinkhere.infrapass.dto.request.GetEncTokenRequest;
+import com.drinkhere.infrapass.dto.CryptoData;
+import com.drinkhere.infrapass.dto.request.GetCryptoTokenRequest;
 import com.drinkhere.infrapass.dto.request.NiceApiRequestData;
 import com.drinkhere.infrapass.dto.response.CreateNiceApiRequestDataDto;
-import com.drinkhere.infrapass.dto.response.GetEncTokenResponse;
+import com.drinkhere.infrapass.dto.response.GetCryptoTokenResponse;
+import com.drinkhere.infraredis.util.RedisUtil;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
-import lombok.Value;
-import org.apache.logging.log4j.util.Base64Util;
 import org.springframework.stereotype.Service;
-import org.springframework.web.reactive.function.client.WebClient;
-
 import javax.crypto.Cipher;
 import javax.crypto.Mac;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
-import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.InvalidKeyException;
-import java.security.NoSuchProviderException;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.Arrays;
 import java.util.Base64;
-import java.util.Date;
 import java.util.UUID;
+
+import static java.util.concurrent.TimeUnit.MINUTES;
+import static java.util.concurrent.TimeUnit.SECONDS;
 
 @Service
 @RequiredArgsConstructor
 public class NiceApiService {
-    private final NiceApiProperties niceApiProperties;
-    private final WebClient niceApiWebClient;
+    private final NiceApiWebClientService niceApiWebClientService;
+    private final RedisUtil redisUtil;
 
-    public CreateNiceApiRequestDataDto startPassAuthentication() {
+    public CreateNiceApiRequestDataDto startPassAuthentication(Long memberId) {
         try {
-            // 1. Header 및 Body 값 세팅
-            String authorization = "bearer " + createAuthorizationHeader(niceApiProperties.getOrganizationToken(), niceApiProperties.getClientId());
-            String productId = niceApiProperties.getProductId();
-            String reqDtim = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss"));
-            String reqNo = UUID.randomUUID().toString().substring(0, 30);
-            GetEncTokenRequest.DataHeader dataHeader = new GetEncTokenRequest.DataHeader("ko");
-            GetEncTokenRequest.DataBody dataBody = new GetEncTokenRequest.DataBody(reqDtim, reqNo, "1");
-            GetEncTokenRequest requestBody = new GetEncTokenRequest(dataHeader, dataBody);
+            GetCryptoTokenResponse cryptoToken;
+            ObjectMapper objectMapper = new ObjectMapper();
+            String key = null;
+            String iv = null;
+            String hmacKey = null;
 
-            // 2. 암호화 토큰 요청
-            GetEncTokenResponse response = niceApiWebClient.post()
-                    .uri("/digital/niceid/api/v1.0/common/crypto/token")
-                    .header("Authorization", authorization)
-                    .header("ProductID", productId)
-                    .bodyValue(requestBody)
-                    .retrieve()
-                    .bodyToMono(GetEncTokenResponse.class)  // 응답을 GetEncTokenResponse 객체로 변환
-                    .block();  // 비동기적으로 요청하고 응답을 기다림 (블록킹)
+            String storedJson = (String) redisUtil.get("cryptoToken");
 
-            if (response == null || response.dataBody() == null) {
-                throw new RuntimeException("Response data is null");
+            if (storedJson != null) { // 암호화 토큰 만료 X
+                cryptoToken = objectMapper.readValue(storedJson, GetCryptoTokenResponse.class);
+
+                // 기존에 저장된 대칭키(key,iv) 및 무결성키(hmac_key) 조회
+                String storedCryptoData = (String) redisUtil.get("cryptoData");
+                if (storedCryptoData != null) {
+                    CryptoData cryptoData = objectMapper.readValue(storedCryptoData, CryptoData.class);
+                    key = cryptoData.key();
+                    iv = cryptoData.iv();
+                    hmacKey = cryptoData.hmacKey();
+                }
+
+            } else { // 암호화 토큰 만료 O
+                String reqDtim = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss"));
+                String reqNo = UUID.randomUUID().toString().substring(0, 30);
+                cryptoToken = niceApiWebClientService.requestCryptoToken(reqDtim, reqNo); // WebClient로 NICE API 암호화 토큰 발급 호출
+
+                if (cryptoToken == null || cryptoToken.dataBody() == null) {
+                    throw new RuntimeException("Response data is null");
+                }
+                // 발급받은 응답 값 Redis에 저장
+                String jsonValue = objectMapper.writeValueAsString(cryptoToken); // Java 객체 → JSON 문자열 (직렬화)
+                redisUtil.saveAsValue("cryptoToken", jsonValue, 3300L, SECONDS);
+
+                // 3. 암호화 토큰 발급 시 사용된 요청 및 응답 데이터로 key, iv, hmac_key 생성 -> 유저마다 redis에 저장하자
+                String tokenVal = cryptoToken.dataBody().tokenVal(); // 암호화 토큰
+                String value = reqDtim.trim() + reqNo.trim() + tokenVal.trim();
+                String resultVal = generateResultVal(value);
+
+                // 새로 발급받은 암호화 토큰으로 대칭키(key,iv) 및 무결성키(hmac_key) 생성
+                key = resultVal.substring(0, 16);
+                iv = resultVal.substring(resultVal.length() - 16);
+                hmacKey = resultVal.substring(0, 32);
+
+                CryptoData cryptoData = CryptoData.of(key, iv, hmacKey);
+                String cryptoDataJson = objectMapper.writeValueAsString(cryptoData);
+                redisUtil.saveWithoutExpiration("cryptoData", cryptoDataJson);
             }
 
-            String tokenVal = response.dataBody().tokenVal(); // 암호화 토큰
-            String value = reqDtim.trim() + reqNo.trim() + tokenVal.trim();
-            String sha256Base64 = generateSha256Base64(value);
-
-            // 3. 암호화 토큰 발급 시 사용된 요청 및 응답 데이터로 key, iv, hmac_key 생성
-            String key = sha256Base64.substring(0, 16); // 앞에서부터 16byte
-            String iv = sha256Base64.substring(sha256Base64.length() - 16); // 뒤에서부터 16byte
-            String hmacKey = sha256Base64.substring(0, 32); // 앞에서부터 32byte
-
-            // 4.요청 데이터 암호화(encData) 및 Hmac무결성체크값(integrityValue) 생성
-            String reqData = createReqDataJson(reqNo, response.dataBody().siteCode());
-            String encData = encryptRequestData(key, iv, reqData);
+            // 4. 요청 데이터 암호화(encData) 및 Hmac 무결성 체크값(integrityValue) 생성
+            String reqData = createReqDataJson(cryptoToken.dataBody().siteCode(), memberId);
+            String encData = encryptReqData(key, iv, reqData);
             byte[] hmacSha256 = hmac256(hmacKey.getBytes(), encData.getBytes());
             String integrityValue = Base64.getEncoder().encodeToString(hmacSha256);
 
             // 5. 표준창 호출 시 필요한 tokenVersionId, encData, integrityValue 반환
             return new CreateNiceApiRequestDataDto(
-                    response.dataBody().tokenVersionId(),
+                    cryptoToken.dataBody().tokenVersionId(),
                     encData,
                     integrityValue
             );
@@ -87,18 +99,8 @@ public class NiceApiService {
         }
     }
 
-    public static String createAuthorizationHeader(String accessToken, String clientId) {
-        try {
-            long currentTimestamp = new Date().getTime() / 1000;
-            String dataToEncode = accessToken + ":" + currentTimestamp + ":" + clientId;
-            String encodedData = Base64.getEncoder().encodeToString(dataToEncode.getBytes(StandardCharsets.UTF_8));
-            return "bearer " + encodedData;
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to create authorization header", e);
-        }
-    }
-
-    private String generateSha256Base64(String value) {
+    private String generateResultVal(String value) {
+        // key, iv, hmac_kay 생성하기 위한 resultVal 생성
         try {
             MessageDigest md = MessageDigest.getInstance("SHA-256");
             md.update(value.getBytes());
@@ -109,7 +111,27 @@ public class NiceApiService {
         }
     }
 
-    public String encryptRequestData(String key, String iv, String reqData) {
+    private String createReqDataJson(String siteCode, Long memberId) throws Exception {
+        // 요청 데이터 생성
+        ObjectMapper objectMapper = new ObjectMapper();
+        String requestNo = UUID.randomUUID().toString().substring(0, 30);
+        // memberId를 URL에 추가
+        String callbackUrl = "https://drinkhere.store/api/v1/public/nice/call-back?mid=" + memberId;
+        NiceApiRequestData requestData = new NiceApiRequestData(
+                requestNo,
+                callbackUrl,
+                siteCode,
+                "Y"
+        );
+
+        // Redis에 requestNo 저장 (key: memberId, value: requestNo, 30분 만료)
+        redisUtil.saveAsValue("memberId:" + memberId + ":requestNo", requestNo, 30L, MINUTES);
+
+        return objectMapper.writeValueAsString(requestData);
+    }
+
+    public String encryptReqData(String key, String iv, String reqData) {
+        // 요청 데이터 암호화
         try {
             SecretKey secureKey = new SecretKeySpec(key.getBytes(), "AES");
             Cipher cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
@@ -123,6 +145,9 @@ public class NiceApiService {
     }
 
     public static byte[] hmac256(byte[] secretKey, byte[] message) {
+        // HMAC-SHA256 계산(hmacSha256):
+        //    - 암호화된 데이터(encData)와 비밀 키(hmacKey)를 사용하여 HMAC-SHA256 값을 계산.
+        //    - 이 값은 데이터의 무결성을 검증하는 데 사용됨.
         try {
             Mac mac = Mac.getInstance("HmacSHA256");
             SecretKeySpec sks = new SecretKeySpec(secretKey, "HmacSHA256");
@@ -132,16 +157,4 @@ public class NiceApiService {
             throw new RuntimeException("Failed to generate HMACSHA256 encrypt", e);
         }
     }
-
-    private String createReqDataJson(String reqNo, String siteCode) throws Exception {
-        ObjectMapper objectMapper = new ObjectMapper();
-        NiceApiRequestData requestData = new NiceApiRequestData(
-                reqNo,
-                "https://drinkhere.store/api/v1/public/nice/call-back",
-                siteCode,
-                "Y"
-        );
-        return objectMapper.writeValueAsString(requestData);
-    }
-
 }

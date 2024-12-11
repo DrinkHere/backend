@@ -8,7 +8,8 @@ import org.springframework.http.HttpStatus;
 @Getter
 @RequiredArgsConstructor
 public enum NiceApiSuccessStatus implements BaseSuccessStatus {
-    START_PASS_AUTHENTICATION_SUCCESS(HttpStatus.OK, "패스 본인인증 로직 시작");
+    START_PASS_AUTHENTICATION_SUCCESS(HttpStatus.OK, "나이스 API 표준창 호출 시 필요한 데이터 반환 성공"),
+    HANDLE_AUTHENTICATION_RESULT_SUCCESS(HttpStatus.OK, "인증결과 처리 성공");
 
     private final HttpStatus httpStatus;
     private final String message;

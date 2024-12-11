@@ -2,5 +2,8 @@ bootJar { enabled = false }
 jar { enabled = true }
 
 dependencies {
+    implementation project(':domain:domain-rds')
+    implementation project(':infra:infra-redis')
+
     implementation 'org.springframework.boot:spring-boot-starter-webflux'
 }

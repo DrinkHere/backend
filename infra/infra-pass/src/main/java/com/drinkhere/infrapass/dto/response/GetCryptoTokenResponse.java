@@ -2,7 +2,7 @@ package com.drinkhere.infrapass.dto.response;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 
-public record GetEncTokenResponse(
+public record GetCryptoTokenResponse(
         @JsonProperty("dataHeader") DataHeader dataHeader,
         @JsonProperty("dataBody") DataBody dataBody
 ) {
